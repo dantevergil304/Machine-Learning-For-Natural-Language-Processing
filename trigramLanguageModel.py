@@ -3,6 +3,90 @@ import codecs
 import re
 
 
+def getWords(training_data_path):
+    file = codecs.open(training_data_path, encoding='utf-8')
+    words = []
+    for text in file.readlines():
+        terms = re.split('\s|[\W0-9]+', text, flags=re.UNICODE)
+        terms = filter(None, terms)
+        words += terms
+    ret = [word.lower() for word in words]
+    ret.append('STOP')
+    return ret
+
+
+def getSetForDiscount(previousWords, wordList, dictionary):
+    # Calculate two sets A(v) and B(v) for discounting method
+    # where:
+    # - A(previous words) = {w: #(v, w) > 0}
+    # - B(previous words) = {w: #(v, w) = 0}
+    A = set()
+    B = set()
+    for w in wordList:
+        term = previousWords + ' ' + w
+        if term in dictionary:
+            A.add(w)
+        else:
+            B.add(w)
+    return A, B
+
+
+def missingProbabilityMass(previousWords, dictionary, Aset):
+    total = 0
+    for w in Aset:
+        total += (dictionary[previousWords + ' ' + w] -
+                  0.5) / float(dictionary[previousWords])
+    return 1 - total
+
+
+def qDiscountingBigram(previousWords, interestWord, dictionary, wordList):
+    Aset, Bset = getSetForDiscount(previousWords, wordList, dictionary)
+    if interestWord in Aset:
+        return (dictionary[previousWords + ' ' + interestWord] - 0.5) / float(dictionary[previousWords])
+    elif interestWord in Bset:
+        # missing probability mass
+        mpm = missingProbabilityMass(previousWords, dictionary, Aset)
+
+        total = 0
+        for t in Bset:
+            total += dictionary[t]
+
+        return mpm * dictionary[interestWord] / float(total)
+
+
+def qDiscountingTrigram(previousWords, interestWord, dictionary, wordList):
+    firstword = previousWords.split(' ')[0]
+    secondword = previousWords.split(' ')[1]
+    Aset, Bset = getSetForDiscount(previousWords, wordList, dictionary)
+
+    print 'qd(', interestWord, '|', previousWords, ') =',
+
+    if interestWord in Aset:
+        ret = (dictionary[previousWords + ' ' + interestWord] -
+               0.5) / float(dictionary[previousWords])
+
+        print '#(', firstword, ',', secondword, ',', interestWord, ')* /', '#(', firstword, ',', secondword, ') =', ret
+        print ''
+
+        return ret
+    elif interestWord in Bset:
+        # missing probability mass
+        mpm = missingProbabilityMass(previousWords, dictionary, Aset)
+
+        total = 0
+        for w in Bset:
+            total += qDiscountingBigram(secondword, w, dictionary, wordList)
+
+        ret = mpm * \
+            qDiscountingBigram(secondword, interestWord,
+                               dictionary, wordList) / float(total)
+
+        print 'alpha(', firstword, ',', secondword, ') x qd(', interestWord, '|', secondword, ') / Sigma(qd( w |', secondword, ') where w is all words in B) =', ret
+        print ''
+
+        return ret
+
+
 def getDictionary(training_data_path):
     file = codecs.open(training_data_path, encoding='utf-8')
     vocabs = {}
@@ -154,6 +238,7 @@ def qLinearInterpolation(previousWords, interestWord, dictionary, totalWordsWith
 
     qml1st = dictionary.get(interestWord, 0) / float(totalWordsWithSTOP)
 
+    # Print info
     print 'q(', interestWord, '|', previousWords, ') =', 'lambda1 x qml(', interestWord, '|', previousWords, ') +', 'lambda2 x qml(', interestWord, '|', lastPrevWord, ') +', 'lambda3 x qml(', interestWord, ')',
     print '=', lambda1, 'x', qml3rd, '+', lambda2, 'x', qml2nd, '+', lambda3, 'x', qml1st,
 
@@ -164,7 +249,7 @@ def qLinearInterpolation(previousWords, interestWord, dictionary, totalWordsWith
     return ret
 
 
-def p(sentence, dictionary, totalWordsWithSTOP):
+def pLinearInterpolation(sentence, dictionary, totalWordsWithSTOP):
     sentence = '* * ' + sentence.lower() + ' STOP'
     wordList = sentence.split(' ')
     p = 1
@@ -176,14 +261,32 @@ def p(sentence, dictionary, totalWordsWithSTOP):
     return p
 
 
-dictionary, numSentences, numWords = getDictionary('./training_data')
-addTokenSecondOrder(dictionary, './training_data')
-addTokenThirdOrder(dictionary, './training_data')
-addSTOPToken(dictionary, './training_data')
-# for vocab, cnt in dictionary.items():
-#     print vocab, cnt
+def pDiscounting(sentence, dictionary, wordList):
+    sentence = '* * ' + sentence.lower() + ' STOP'
+    words = sentence.split(' ')
+    p = 1
+    for ix in range(2, len(words)):
+        previousWords = words[ix - 2] + ' ' + words[ix - 1]
+        interestWord = words[ix]
+        k = qDiscountingTrigram(previousWords,
+                                interestWord, dictionary, wordList)
+        p *= k
+    return p
+
+
+wordList = getWords('./training_data_2')
+dictionary, numSentences, numWords = getDictionary('./training_data_2')
+addTokenSecondOrder(dictionary, './training_data_2')
+addTokenThirdOrder(dictionary, './training_data_2')
+addSTOPToken(dictionary, './training_data_2')
 
 sentence = raw_input('\nINPUT SENTENCE: ')
 sentence = unicode(sentence, 'utf-8')
-prob = p(sentence, dictionary, numSentences + numWords)
+prob = pDiscounting(sentence, dictionary, wordList)
 print 'p(sentence) =', prob
+# print qDiscountingBigram(u'lá', u'rừng', dictionary, wordList)
+# print qDiscountingBigram(u'rừng', 'STOP', dictionary, wordList)
+# print qDiscountingBigram('*', u'lá', dictionary, wordList)
+# print qDiscountingTrigram('* *', u'nước', dictionary, wordList)
+# print qDiscountingTrigram(u'* nước', u'ao', dictionary, wordList)
+# print qDiscountingTrigram(u'trong veo', 'STOP', dictionary, wordList)
